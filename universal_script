@@ -1,203 +1,428 @@
-ESP
-
---[[
-    Client-Side Player ESP Script with Toggle GUI
-    - Draggable GUI with an On/Off switch.
-    - RED chams/highlight on all other players.
-    - Displays Name, Distance, and Health on a single line of white text.
-]]
-
--- A check to prevent the script from being run multiple times by mistake
-if getgenv().espIsRunning then return end
-getgenv().espIsRunning = true
-
+--============================================================================--
 -- Services
+--============================================================================--
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local CoreGui = game:GetService("CoreGui")
+local UserInputService = game:GetService("UserInputService")
+local ContextActionService = game:GetService("ContextActionService")
 
--- Script State
+--============================================================================--
+-- Configuration & State
+--============================================================================--
+local espSettings = {
+	enabled = false,
+	outline = true,
+	info = true,
+	tracers = true
+}
+
+local aimbotSettings = {
+	enabled = false,
+	fovRadius = 150,
+	fovOpacity = 0.5,
+	aimSmoothing = 0.6
+}
+
+local flySettings = {
+	enabled = false,
+	speed = 50
+}
+
+-- NEW: Misc settings table
+local miscSettings = {
+	noclip = false
+}
+
 local localPlayer = Players.LocalPlayer
-local espEnabled = true -- ESP is on by default
 local playerVisuals = {}
+local tracerDrawings = {}
+local ACTION_TOGGLE_MENU = "ToggleGUIMenu"
+local flyVelocity = nil -- To store the BodyVelocity for flying
+local noclipConnection = nil -- To store the noclip RenderStepped connection
 
----------------------------------------------------------------------
--- GUI Creation and Logic
----------------------------------------------------------------------
-
+--============================================================================--
+-- GUI Creation
+--============================================================================--
 local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "ESP_GUI_" .. tostring(math.random(1, 1000))
+screenGui.Name = "MainGUI"
 screenGui.ResetOnSpawn = false
-screenGui.Parent = CoreGui
+screenGui.Parent = localPlayer:WaitForChild("PlayerGui")
 
 local mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.new(0, 200, 0, 80)
-mainFrame.Position = UDim2.new(0.1, 0, 0.1, 0)
+mainFrame.Name = "MainFrame"
+mainFrame.Size = UDim2.new(0, 400, 0, 300)
+mainFrame.Position = UDim2.new(0.5, -200, 0.5, -150)
 mainFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-mainFrame.BorderColor3 = Color3.fromRGB(100, 100, 100)
-mainFrame.Active = true
-mainFrame.Draggable = true
+mainFrame.BorderSizePixel = 2
+mainFrame.BorderColor3 = Color3.fromRGB(80, 80, 80)
+mainFrame.Visible = false
 mainFrame.Parent = screenGui
 
-local titleLabel = Instance.new("TextLabel")
-titleLabel.Size = UDim2.new(1, 0, 0, 30)
-titleLabel.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-titleLabel.TextColor3 = Color3.new(1, 1, 1)
-titleLabel.Text = "ESP Menu"
-titleLabel.Font = Enum.Font.SourceSansBold
-titleLabel.TextSize = 16
-titleLabel.Parent = mainFrame
+local tabContainer = Instance.new("Frame")
+tabContainer.Name = "TabContainer"
+tabContainer.Size = UDim2.new(1, 0, 0, 30)
+tabContainer.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+tabContainer.BorderSizePixel = 0
+tabContainer.Parent = mainFrame
 
-local toggleButton = Instance.new("TextButton")
-toggleButton.Size = UDim2.new(0, 180, 0, 30)
-toggleButton.Position = UDim2.new(0.5, -90, 0, 40)
-toggleButton.BackgroundColor3 = Color3.fromRGB(80, 175, 80) -- Green for ON
-toggleButton.TextColor3 = Color3.new(1, 1, 1)
-toggleButton.Font = Enum.Font.SourceSansSemibold
-toggleButton.TextSize = 18
-toggleButton.Text = "ESP: ON"
-toggleButton.Parent = mainFrame
+local tabLayout = Instance.new("UIListLayout")
+tabLayout.FillDirection = Enum.FillDirection.Horizontal
+tabLayout.Parent = tabContainer
 
-local corner = Instance.new("UICorner")
-corner.CornerRadius = UDim.new(0, 5)
-corner.Parent = mainFrame
+local contentContainer = Instance.new("Frame")
+contentContainer.Name = "ContentContainer"
+contentContainer.Size = UDim2.new(1, 0, 1, -30)
+contentContainer.Position = UDim2.new(0, 0, 0, 30)
+contentContainer.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
+contentContainer.BorderSizePixel = 0
+contentContainer.Parent = mainFrame
 
-local buttonCorner = Instance.new("UICorner")
-buttonCorner.CornerRadius = UDim.new(0, 3)
-buttonCorner.Parent = toggleButton
+local tabs = {"ESP", "Aimbot", "Fly", "Misc"}
+local contentPages = {}
+for _, tabName in ipairs(tabs) do
+	local tabButton = Instance.new("TextButton")
+	tabButton.Name = tabName .. "Tab"
+	tabButton.Size = UDim2.new(0.25, 0, 1, 0)
+	tabButton.Text = tabName
+	tabButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+	tabButton.Font = Enum.Font.SourceSansBold
+	tabButton.TextColor3 = Color3.fromRGB(200, 200, 200)
+	tabButton.TextScaled = true
+	tabButton.Parent = tabContainer
 
--- Function to handle cleaning up all visuals at once
-local function cleanupAllVisuals()
-    for player, _ in pairs(playerVisuals) do
-        if playerVisuals[player] then
-            if playerVisuals[player].BillboardGui then
-                playerVisuals[player].BillboardGui:Destroy()
-            end
-            if playerVisuals[player].Highlight then
-                playerVisuals[player].Highlight:Destroy()
-            end
-        end
-    end
-    playerVisuals = {}
+	local contentPage = Instance.new("Frame")
+	contentPage.Name = tabName .. "Content"
+	contentPage.Size = UDim2.new(1, 0, 1, 0)
+	contentPage.BackgroundTransparency = 1
+	contentPage.Visible = false
+	contentPage.Parent = contentContainer
+	contentPages[tabName] = contentPage
 end
 
--- Toggle button logic
-toggleButton.MouseButton1Click:Connect(function()
-    espEnabled = not espEnabled
-    
-    if espEnabled then
-        toggleButton.Text = "ESP: ON"
-        toggleButton.BackgroundColor3 = Color3.fromRGB(80, 175, 80) -- Green
-    else
-        toggleButton.Text = "ESP: OFF"
-        toggleButton.BackgroundColor3 = Color3.fromRGB(200, 75, 75) -- Red
-        cleanupAllVisuals()
-    end
+local function createToggleButton(text, parent)
+	local button = Instance.new("TextButton")
+	button.Name = text:gsub(" ", "") .. "Button"
+	button.Size = UDim2.new(0, 150, 0, 40)
+	button.Text = text .. ": OFF"
+	button.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+	button.Font = Enum.Font.SourceSansBold
+	button.TextColor3 = Color3.fromRGB(255, 255, 255)
+	button.TextScaled = true
+	button.Parent = parent
+	return button
+end
+
+-- --- ESP Tab Population ---
+local espContentPage = contentPages["ESP"]
+local espPageLayout = Instance.new("UIListLayout"); espPageLayout.Padding = UDim.new(0, 10); espPageLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left; espPageLayout.SortOrder = Enum.SortOrder.LayoutOrder; espPageLayout.Parent = espContentPage
+local pagePadding = Instance.new("UIPadding"); pagePadding.PaddingLeft = UDim.new(0, 10); pagePadding.PaddingTop = UDim.new(0, 10); pagePadding.Parent = espContentPage
+local espToggleButton = createToggleButton("Toggle ESP", espContentPage)
+local outlineToggleButton = createToggleButton("Toggle Outline", espContentPage)
+local infoToggleButton = createToggleButton("Toggle Info", espContentPage)
+local tracersToggleButton = createToggleButton("Toggle Tracers", espContentPage)
+
+-- --- Aimbot Tab Population ---
+local aimbotContentPage = contentPages["Aimbot"]
+local aimbotPageLayout = Instance.new("UIListLayout"); aimbotPageLayout.Padding = UDim.new(0, 10); aimbotPageLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left; aimbotPageLayout.Parent = aimbotContentPage
+local aimbotPagePadding = Instance.new("UIPadding"); aimbotPagePadding.PaddingLeft = UDim.new(0, 10); aimbotPagePadding.PaddingTop = UDim.new(0, 10); aimbotPagePadding.Parent = aimbotContentPage
+local aimbotToggleButton = createToggleButton("Toggle Aimbot", aimbotContentPage)
+local fovCircle = Drawing.new("Circle"); fovCircle.Visible = false; fovCircle.Thickness = 1.5; fovCircle.Color = Color3.new(1, 1, 1); fovCircle.Filled = false; fovCircle.NumSides = 64
+
+-- --- Fly Tab Population ---
+local flyContentPage = contentPages["Fly"]
+local flyPageLayout = Instance.new("UIListLayout"); flyPageLayout.Padding = UDim.new(0, 10); flyPageLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left; flyPageLayout.Parent = flyContentPage
+local flyPagePadding = Instance.new("UIPadding"); flyPagePadding.PaddingLeft = UDim.new(0, 10); flyPagePadding.PaddingTop = UDim.new(0, 10); flyPagePadding.Parent = flyContentPage
+local flyToggleButton = createToggleButton("Toggle Fly", flyContentPage)
+
+-- --- NEW: Misc Tab Population ---
+local miscContentPage = contentPages["Misc"]
+local miscPageLayout = Instance.new("UIListLayout"); miscPageLayout.Padding = UDim.new(0, 10); miscPageLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left; miscPageLayout.Parent = miscContentPage
+local miscPagePadding = Instance.new("UIPadding"); miscPagePadding.PaddingLeft = UDim.new(0, 10); miscPagePadding.PaddingTop = UDim.new(0, 10); miscPagePadding.Parent = miscContentPage
+local noclipToggleButton = createToggleButton("Toggle Noclip", miscContentPage)
+
+
+local function createSlider(text, min, max, default, parent)
+	local container = Instance.new("Frame"); container.Size = UDim2.new(0, 300, 0, 30); container.BackgroundTransparency = 1; container.Parent = parent
+	local label = Instance.new("TextLabel"); label.Size = UDim2.new(0.5, 0, 1, 0); label.Text = string.format("%s: %.2f", text, default); label.Font = Enum.Font.SourceSans; label.TextColor3 = Color3.new(1, 1, 1); label.TextXAlignment = Enum.TextXAlignment.Left; label.BackgroundTransparency = 1; label.Parent = container
+	local track = Instance.new("Frame"); track.Size = UDim2.new(0.5, 0, 0, 8); track.Position = UDim2.new(0.5, 0, 0.5, -4); track.BackgroundColor3 = Color3.fromRGB(80, 80, 80); track.Parent = container
+	local knob = Instance.new("TextButton"); knob.Size = UDim2.new(0, 16, 0, 16); knob.Position = UDim2.new((default - min) / (max - min), 0, 0.5, -8); knob.BackgroundColor3 = Color3.new(1, 1, 1); knob.Parent = track
+	local value = default
+	knob.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			local moveConn, releaseConn
+			moveConn = UserInputService.InputChanged:Connect(function(moveInput)
+				if moveInput.UserInputType == Enum.UserInputType.MouseMovement then
+					local newX = math.clamp(moveInput.Position.X - track.AbsolutePosition.X, 0, track.AbsoluteSize.X)
+					knob.Position = UDim2.new(0, newX, 0.5, -8)
+					local percent = newX / track.AbsoluteSize.X; value = min + (max - min) * percent
+					label.Text = string.format("%s: %.2f", text, value)
+				end
+			end)
+			releaseConn = UserInputService.InputEnded:Connect(function(endInput)
+				if endInput.UserInputType == Enum.UserInputType.MouseButton1 then moveConn:Disconnect(); releaseConn:Disconnect() end
+			end)
+		end
+	end)
+	return function() return value end
+end
+
+local getFovRadius = createSlider("FOV Radius", 50, 500, aimbotSettings.fovRadius, aimbotContentPage)
+local getFovOpacity = createSlider("FOV Opacity", 0, 1, aimbotSettings.fovOpacity, aimbotContentPage)
+local getAimSmoothing = createSlider("Aim Smoothing", 0.01, 1, aimbotSettings.aimSmoothing, aimbotContentPage)
+local getFlySpeed = createSlider("Fly Speed", 10, 200, flySettings.speed, flyContentPage)
+
+--============================================================================--
+-- Core Functions
+--============================================================================--
+local function updatePlayerVisuals(player)
+	if not espSettings.enabled then
+		if playerVisuals[player] then
+			if playerVisuals[player].highlight then playerVisuals[player].highlight:Destroy() end
+			if playerVisuals[player].billboard then playerVisuals[player].billboard:Destroy() end
+			playerVisuals[player] = nil
+		end
+		return
+	end
+	
+	local character = player.Character
+	if not player or player == localPlayer or not character or not character.Parent then return end
+	if not playerVisuals[player] then playerVisuals[player] = {} end
+	
+	if espSettings.outline and not playerVisuals[player].highlight then
+		local highlight = Instance.new("Highlight")
+		highlight.OutlineColor = Color3.fromRGB(255, 255, 255); highlight.FillColor = Color3.fromRGB(255, 0, 0); highlight.FillTransparency = 0.5; highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop; highlight.Parent = character
+		playerVisuals[player].highlight = highlight
+	elseif not espSettings.outline and playerVisuals[player].highlight then
+		playerVisuals[player].highlight:Destroy(); playerVisuals[player].highlight = nil
+	end
+	
+	local head = character:FindFirstChild("Head")
+	if espSettings.info and not playerVisuals[player].billboard and head then
+		local billboard = Instance.new("BillboardGui")
+		billboard.Adornee = head; billboard.Size = UDim2.new(0, 300, 0, 40); billboard.StudsOffset = Vector3.new(0, 2.5, 0); billboard.AlwaysOnTop = true; billboard.Parent = head
+		playerVisuals[player].billboard = billboard
+		local infoLabel = Instance.new("TextLabel")
+		infoLabel.Name = "InfoLabel" 
+		infoLabel.Size = UDim2.new(1, 0, 1, 0); infoLabel.BackgroundTransparency = 1; infoLabel.TextColor3 = Color3.fromRGB(255, 255, 255); infoLabel.Font = Enum.Font.SourceSansBold; infoLabel.TextScaled = true; infoLabel.Parent = billboard
+	elseif not espSettings.info and playerVisuals[player].billboard then
+		playerVisuals[player].billboard:Destroy(); playerVisuals[player].billboard = nil
+	end
+end
+
+local function toggleFly(enabled)
+	local character = localPlayer.Character
+	if not character then return end
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	local rootPart = character:FindFirstChild("HumanoidRootPart")
+	if not humanoid or not rootPart then return end
+
+	if enabled then
+		humanoid.PlatformStand = true
+		if flyVelocity then flyVelocity:Destroy() end
+		flyVelocity = Instance.new("BodyVelocity")
+		flyVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+		flyVelocity.Velocity = Vector3.new(0, 0, 0)
+		flyVelocity.Parent = rootPart
+	else
+		humanoid.PlatformStand = false
+		if flyVelocity then
+			flyVelocity:Destroy()
+			flyVelocity = nil
+		end
+	end
+end
+
+-- NEW: Noclip Functionality
+local function toggleNoclip(enabled)
+	if enabled then
+		if noclipConnection then noclipConnection:Disconnect() end
+		noclipConnection = RunService.Stepped:Connect(function()
+			local character = localPlayer.Character
+			if character then
+				for _, part in ipairs(character:GetDescendants()) do
+					if part:IsA("BasePart") then
+						part.CanCollide = false
+					end
+				end
+			end
+		end)
+	else
+		if noclipConnection then
+			noclipConnection:Disconnect()
+			noclipConnection = nil
+			-- Restore collisions (optional, but good practice)
+			local character = localPlayer.Character
+			if character then
+				for _, part in ipairs(character:GetDescendants()) do
+					if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+						part.CanCollide = true
+					end
+				end
+			end
+		end
+	end
+end
+
+
+--============================================================================--
+-- UI and Event Handling
+--============================================================================--
+tabContainer.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		local startPos = mainFrame.Position; local mouseStartPos = UserInputService:GetMouseLocation()
+		local moveConn, releaseConn
+		moveConn = UserInputService.InputChanged:Connect(function(moveInput)
+			if moveInput.UserInputType == Enum.UserInputType.MouseMovement or moveInput.UserInputType == Enum.UserInputType.Touch then
+				local delta = moveInput.Position - mouseStartPos
+				mainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+			end
+		end)
+		releaseConn = UserInputService.InputEnded:Connect(function(releaseInput)
+			if releaseInput.UserInputType == Enum.UserInputType.MouseButton1 or releaseInput.UserInputType == Enum.UserInputType.Touch then
+				moveConn:Disconnect(); releaseConn:Disconnect()
+			end
+		end)
+	end
 end)
 
-
----------------------------------------------------------------------
--- ESP Logic
----------------------------------------------------------------------
-
--- Function to clean up visuals for a single player
-local function cleanupVisuals(player)
-    if playerVisuals[player] then
-        if playerVisuals[player].BillboardGui then
-            playerVisuals[player].BillboardGui:Destroy()
-        end
-        if playerVisuals[player].Highlight then
-            playerVisuals[player].Highlight:Destroy()
-        end
-        playerVisuals[player] = nil
-    end
+local function switchTab(targetTabName)
+	for name, page in pairs(contentPages) do page.Visible = (name == targetTabName) end
+	for _, button in ipairs(tabContainer:GetChildren()) do
+		if button:IsA("TextButton") then button.BackgroundColor3 = (button.Name == targetTabName .. "Tab") and Color3.fromRGB(55, 55, 55) or Color3.fromRGB(60, 60, 60) end
+	end
 end
 
--- Function to create and update the visuals for a player
-local function createOrUpdateVisuals(player)
-    local character = player.Character
-    local localCharacter = localPlayer.Character
-    if not character or not localCharacter then return end
-    
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
-    local head = character:FindFirstChild("Head")
-    local rootPart = character:FindFirstChild("HumanoidRootPart")
-    local localRootPart = localCharacter:FindFirstChild("HumanoidRootPart")
-    
-    if not humanoid or not head or not rootPart or not localRootPart or humanoid.Health <= 0 then
-        cleanupVisuals(player)
-        return
-    end
-
-    if not playerVisuals[player] then playerVisuals[player] = {} end
-    local visuals = playerVisuals[player]
-
-    if not visuals.Highlight or visuals.Highlight.Parent ~= character then
-        if visuals.Highlight then visuals.Highlight:Destroy() end
-        visuals.Highlight = Instance.new("Highlight")
-        
-        -- /// THIS IS THE CHANGED LINE ///
-        visuals.Highlight.FillColor = Color3.fromRGB(255, 0, 0) -- Set to RED
-        
-        visuals.Highlight.FillTransparency = 0.7
-        visuals.Highlight.OutlineColor = Color3.new(1, 1, 1)
-        visuals.Highlight.OutlineTransparency = 0.2
-        visuals.Highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-        visuals.Highlight.Parent = character
-    end
-
-    if not visuals.BillboardGui or visuals.BillboardGui.Parent == nil then
-        if visuals.BillboardGui then visuals.BillboardGui:Destroy() end
-        local billboardGui = Instance.new("BillboardGui")
-        billboardGui.AlwaysOnTop = true
-        billboardGui.Size = UDim2.new(10, 0, 1.5, 0)
-        billboardGui.StudsOffset = Vector3.new(0, 3, 0)
-        billboardGui.Adornee = head
-        
-        local infoLabel = Instance.new("TextLabel")
-        infoLabel.Name = "InfoLabel"
-        infoLabel.BackgroundTransparency = 1
-        infoLabel.Size = UDim2.new(1, 0, 1, 0)
-        infoLabel.Font = Enum.Font.SourceSansSemibold
-        infoLabel.TextSize = 18
-        infoLabel.TextColor3 = Color3.new(1, 1, 1) -- White text
-        infoLabel.TextStrokeTransparency = 0.5
-        infoLabel.Parent = billboardGui
-        
-        billboardGui.Parent = CoreGui
-        visuals.BillboardGui = billboardGui
-    end
-
-    -- Update the combined text every frame
-    local infoLabel = visuals.BillboardGui:FindFirstChild("InfoLabel")
-    if infoLabel then
-        local name = player.DisplayName
-        local distance = (localRootPart.Position - rootPart.Position).Magnitude
-        local health = humanoid.Health
-        local maxHealth = humanoid.MaxHealth
-        
-        infoLabel.Text = string.format("%s [%.0f studs] (%d/%d)", name, distance, health, maxHealth)
-    end
+for tabName, _ in pairs(contentPages) do
+	tabContainer[tabName .. "Tab"].MouseButton1Click:Connect(function() switchTab(tabName) end)
 end
 
--- Main render loop
-local connection = RunService.RenderStepped:Connect(function()
-    if not espEnabled then return end
+local function updateAllPlayersVisuals() for _, player in ipairs(Players:GetPlayers()) do updatePlayerVisuals(player) end end
 
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= localPlayer then
-            pcall(createOrUpdateVisuals, player)
-        end
-    end
+local function setupToggleButton(button, settingsTable, key, textPrefix, callback)
+	local initialState = settingsTable[key]; button.Text = textPrefix .. (initialState and ": ON" or ": OFF"); button.BackgroundColor3 = initialState and Color3.fromRGB(50, 200, 50) or Color3.fromRGB(200, 50, 50)
+	button.MouseButton1Click:Connect(function()
+		settingsTable[key] = not settingsTable[key]; local state = settingsTable[key]
+		button.Text = textPrefix .. (state and ": ON" or ": OFF"); button.BackgroundColor3 = state and Color3.fromRGB(50, 200, 50) or Color3.fromRGB(200, 50, 50)
+		if callback then callback(state) end -- Pass the new state to the callback
+	end)
+end
+
+setupToggleButton(espToggleButton, espSettings, "enabled", "Toggle ESP", updateAllPlayersVisuals)
+setupToggleButton(outlineToggleButton, espSettings, "outline", "Toggle Outline", updateAllPlayersVisuals)
+setupToggleButton(infoToggleButton, espSettings, "info", "Toggle Info", updateAllPlayersVisuals)
+setupToggleButton(tracersToggleButton, espSettings, "tracers", "Toggle Tracers", nil)
+setupToggleButton(aimbotToggleButton, aimbotSettings, "enabled", "Toggle Aimbot", nil)
+setupToggleButton(flyToggleButton, flySettings, "enabled", "Toggle Fly", toggleFly)
+-- NEW: Setup noclip toggle button
+setupToggleButton(noclipToggleButton, miscSettings, "noclip", "Toggle Noclip", toggleNoclip)
+
+
+local function ToggleMenuAction(actionName, inputState, inputObject)
+	if actionName == ACTION_TOGGLE_MENU and inputState == Enum.UserInputState.Begin then mainFrame.Visible = not mainFrame.Visible end
+end
+
+ContextActionService:BindAction(ACTION_TOGGLE_MENU, ToggleMenuAction, false, Enum.KeyCode.RightShift)
+
+local function onCharacterAdded(character) updatePlayerVisuals(character.Parent) end
+local function onPlayerAdded(player)
+	if player.Character then onCharacterAdded(player.Character) end
+	player.CharacterAdded:Connect(onCharacterAdded)
+end
+Players.PlayerAdded:Connect(onPlayerAdded)
+Players.PlayerRemoving:Connect(function(player) if playerVisuals[player] then playerVisuals[player] = nil end end)
+for _, player in ipairs(Players:GetPlayers()) do onPlayerAdded(player) end
+
+switchTab("ESP")
+
+--============================================================================--
+-- Main Render Loop
+--============================================================================--
+RunService.RenderStepped:Connect(function()
+	local camera = workspace.CurrentCamera; if not camera then return end
+
+	-- Update settings from sliders every frame
+	aimbotSettings.fovRadius = getFovRadius()
+	aimbotSettings.fovOpacity = getFovOpacity()
+	aimbotSettings.aimSmoothing = getAimSmoothing()
+	flySettings.speed = getFlySpeed()
+
+	-- ESP Visuals
+	for _, tracer in ipairs(tracerDrawings) do tracer:Destroy() end; table.clear(tracerDrawings)
+	if espSettings.enabled and localPlayer.Character then
+		local localHead = localPlayer.Character:FindFirstChild("Head")
+		local tracerStartPoint = Vector2.new(camera.ViewportSize.X/2, camera.ViewportSize.Y)
+		for _, player in ipairs(Players:GetPlayers()) do
+			if player ~= localPlayer and player.Character then
+				if espSettings.info and playerVisuals[player] and playerVisuals[player].billboard and localHead then
+					local infoLabel, humanoid, head = playerVisuals[player].billboard:FindFirstChild("InfoLabel"), player.Character:FindFirstChildOfClass("Humanoid"), player.Character:FindFirstChild("Head")
+					if infoLabel and humanoid and head then
+						local dist = math.floor((localHead.Position - head.Position).Magnitude)
+						infoLabel.Text = string.format("%s | HP: %d | Dist: %d", player.DisplayName, math.floor(humanoid.Health), dist)
+					end
+				end
+				if espSettings.tracers then
+					local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+					if hrp then
+						local pos, onScreen = camera:WorldToScreenPoint(hrp.Position)
+						if onScreen then
+							local line = Drawing.new("Line"); line.Visible = true; line.From = tracerStartPoint; line.To = Vector2.new(pos.X, pos.Y); line.Color = Color3.new(1,1,1); line.Thickness = 1.5
+							table.insert(tracerDrawings, line)
+						end
+					end
+				end
+			end
+		end
+	end
+
+	-- Aimbot Visuals and Logic
+	fovCircle.Visible = aimbotSettings.enabled; fovCircle.Radius = aimbotSettings.fovRadius; fovCircle.Position = Vector2.new(camera.ViewportSize.X/2, camera.ViewportSize.Y/2); fovCircle.Transparency = 1-aimbotSettings.fovOpacity
+	if aimbotSettings.enabled and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
+		local screenCenter = Vector2.new(camera.ViewportSize.X/2, camera.ViewportSize.Y/2); local closestTarget, minDistance = nil, aimbotSettings.fovRadius
+		for _, player in ipairs(Players:GetPlayers()) do
+			if player ~= localPlayer and player.Character and player.Character:FindFirstChild("Head") then
+				local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+				if humanoid and humanoid.Health > 0 then
+					local targetPart = player.Character.Head
+					local screenPos, onScreen = camera:WorldToScreenPoint(targetPart.Position)
+					if onScreen then
+						local distance = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
+						if distance < minDistance then minDistance = distance; closestTarget = targetPart end
+					end
+				end
+			end
+		end
+		if closestTarget then
+			local targetCFrame = CFrame.lookAt(camera.CFrame.Position, closestTarget.Position)
+			camera.CFrame = camera.CFrame:Lerp(targetCFrame, aimbotSettings.aimSmoothing)
+		end
+	end
+	
+	-- Fly Movement Logic
+	if flySettings.enabled and flyVelocity then
+		local moveVector = Vector3.new(0, 0, 0)
+		if UserInputService:IsKeyDown(Enum.KeyCode.W) then
+			moveVector = moveVector + camera.CFrame.LookVector
+		end
+		if UserInputService:IsKeyDown(Enum.KeyCode.S) then
+			moveVector = moveVector - camera.CFrame.LookVector
+		end
+		if UserInputService:IsKeyDown(Enum.KeyCode.A) then
+			moveVector = moveVector - camera.CFrame.RightVector
+		end
+		if UserInputService:IsKeyDown(Enum.KeyCode.D) then
+			moveVector = moveVector + camera.CFrame.RightVector
+		end
+		if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+			moveVector = moveVector + Vector3.new(0, 1, 0)
+		end
+		if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
+			moveVector = moveVector - Vector3.new(0, 1, 0)
+		end
+
+		if moveVector.Magnitude > 0 then
+			flyVelocity.Velocity = moveVector.Unit * flySettings.speed
+		else
+			flyVelocity.Velocity = Vector3.new(0, 0, 0)
+		end
+	end
 end)
-
-Players.PlayerRemoving:Connect(cleanupVisuals)
-
--- Function to completely stop the script and clean up
-getgenv().stopESP = function()
-    connection:Disconnect()
-    cleanupAllVisuals()
-    screenGui:Destroy()
-    getgenv().espIsRunning = false
-    print("ESP Script Terminated.")
-end
