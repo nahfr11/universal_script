@@ -1,38 +1,203 @@
-local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+ESP
 
-local Window = Rayfield:CreateWindow({
-   Name = "Rayfield Example Window",
-   Icon = 0, -- Icon in Topbar. Can use Lucide Icons (string) or Roblox Image (number). 0 to use no icon (default).
-   LoadingTitle = "Rayfield Interface Suite",
-   LoadingSubtitle = "by Sirius",
-   ShowText = "Rayfield", -- for mobile users to unhide rayfield, change if you'd like
-   Theme = "Default", -- Check https://docs.sirius.menu/rayfield/configuration/themes
+--[[
+    Client-Side Player ESP Script with Toggle GUI
+    - Draggable GUI with an On/Off switch.
+    - RED chams/highlight on all other players.
+    - Displays Name, Distance, and Health on a single line of white text.
+]]
 
-   ToggleUIKeybind = "K", -- The keybind to toggle the UI visibility (string like "K" or Enum.KeyCode)
+-- A check to prevent the script from being run multiple times by mistake
+if getgenv().espIsRunning then return end
+getgenv().espIsRunning = true
 
-   DisableRayfieldPrompts = false,
-   DisableBuildWarnings = false, -- Prevents Rayfield from warning when the script has a version mismatch with the interface
+-- Services
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local CoreGui = game:GetService("CoreGui")
 
-   ConfigurationSaving = {
-      Enabled = true,
-      FolderName = nil, -- Create a custom folder for your hub/game
-      FileName = "Big Hub"
-   },
+-- Script State
+local localPlayer = Players.LocalPlayer
+local espEnabled = true -- ESP is on by default
+local playerVisuals = {}
 
-   Discord = {
-      Enabled = false, -- Prompt the user to join your Discord server if their executor supports it
-      Invite = "noinvitelink", -- The Discord invite code, do not include discord.gg/. E.g. discord.gg/ ABCD would be ABCD
-      RememberJoins = true -- Set this to false to make them join the discord every time they load it up
-   },
+---------------------------------------------------------------------
+-- GUI Creation and Logic
+---------------------------------------------------------------------
 
-   KeySystem = false, -- Set this to true to use our key system
-   KeySettings = {
-      Title = "Untitled",
-      Subtitle = "Key System",
-      Note = "No method of obtaining the key is provided", -- Use this to tell the user how to get a key
-      FileName = "Key", -- It is recommended to use something unique as other scripts using Rayfield may overwrite your key file
-      SaveKey = true, -- The user's key will be saved, but if you change the key, they will be unable to use your script
-      GrabKeyFromSite = false, -- If this is true, set Key below to the RAW site you would like Rayfield to get the key from
-      Key = {"Hello"} -- List of keys that will be accepted by the system, can be RAW file links (pastebin, github etc) or simple strings ("hello","key22")
-   }
-})
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "ESP_GUI_" .. tostring(math.random(1, 1000))
+screenGui.ResetOnSpawn = false
+screenGui.Parent = CoreGui
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 200, 0, 80)
+mainFrame.Position = UDim2.new(0.1, 0, 0.1, 0)
+mainFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+mainFrame.BorderColor3 = Color3.fromRGB(100, 100, 100)
+mainFrame.Active = true
+mainFrame.Draggable = true
+mainFrame.Parent = screenGui
+
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Size = UDim2.new(1, 0, 0, 30)
+titleLabel.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+titleLabel.TextColor3 = Color3.new(1, 1, 1)
+titleLabel.Text = "ESP Menu"
+titleLabel.Font = Enum.Font.SourceSansBold
+titleLabel.TextSize = 16
+titleLabel.Parent = mainFrame
+
+local toggleButton = Instance.new("TextButton")
+toggleButton.Size = UDim2.new(0, 180, 0, 30)
+toggleButton.Position = UDim2.new(0.5, -90, 0, 40)
+toggleButton.BackgroundColor3 = Color3.fromRGB(80, 175, 80) -- Green for ON
+toggleButton.TextColor3 = Color3.new(1, 1, 1)
+toggleButton.Font = Enum.Font.SourceSansSemibold
+toggleButton.TextSize = 18
+toggleButton.Text = "ESP: ON"
+toggleButton.Parent = mainFrame
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 5)
+corner.Parent = mainFrame
+
+local buttonCorner = Instance.new("UICorner")
+buttonCorner.CornerRadius = UDim.new(0, 3)
+buttonCorner.Parent = toggleButton
+
+-- Function to handle cleaning up all visuals at once
+local function cleanupAllVisuals()
+    for player, _ in pairs(playerVisuals) do
+        if playerVisuals[player] then
+            if playerVisuals[player].BillboardGui then
+                playerVisuals[player].BillboardGui:Destroy()
+            end
+            if playerVisuals[player].Highlight then
+                playerVisuals[player].Highlight:Destroy()
+            end
+        end
+    end
+    playerVisuals = {}
+end
+
+-- Toggle button logic
+toggleButton.MouseButton1Click:Connect(function()
+    espEnabled = not espEnabled
+    
+    if espEnabled then
+        toggleButton.Text = "ESP: ON"
+        toggleButton.BackgroundColor3 = Color3.fromRGB(80, 175, 80) -- Green
+    else
+        toggleButton.Text = "ESP: OFF"
+        toggleButton.BackgroundColor3 = Color3.fromRGB(200, 75, 75) -- Red
+        cleanupAllVisuals()
+    end
+end)
+
+
+---------------------------------------------------------------------
+-- ESP Logic
+---------------------------------------------------------------------
+
+-- Function to clean up visuals for a single player
+local function cleanupVisuals(player)
+    if playerVisuals[player] then
+        if playerVisuals[player].BillboardGui then
+            playerVisuals[player].BillboardGui:Destroy()
+        end
+        if playerVisuals[player].Highlight then
+            playerVisuals[player].Highlight:Destroy()
+        end
+        playerVisuals[player] = nil
+    end
+end
+
+-- Function to create and update the visuals for a player
+local function createOrUpdateVisuals(player)
+    local character = player.Character
+    local localCharacter = localPlayer.Character
+    if not character or not localCharacter then return end
+    
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local head = character:FindFirstChild("Head")
+    local rootPart = character:FindFirstChild("HumanoidRootPart")
+    local localRootPart = localCharacter:FindFirstChild("HumanoidRootPart")
+    
+    if not humanoid or not head or not rootPart or not localRootPart or humanoid.Health <= 0 then
+        cleanupVisuals(player)
+        return
+    end
+
+    if not playerVisuals[player] then playerVisuals[player] = {} end
+    local visuals = playerVisuals[player]
+
+    if not visuals.Highlight or visuals.Highlight.Parent ~= character then
+        if visuals.Highlight then visuals.Highlight:Destroy() end
+        visuals.Highlight = Instance.new("Highlight")
+        
+        -- /// THIS IS THE CHANGED LINE ///
+        visuals.Highlight.FillColor = Color3.fromRGB(255, 0, 0) -- Set to RED
+        
+        visuals.Highlight.FillTransparency = 0.7
+        visuals.Highlight.OutlineColor = Color3.new(1, 1, 1)
+        visuals.Highlight.OutlineTransparency = 0.2
+        visuals.Highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        visuals.Highlight.Parent = character
+    end
+
+    if not visuals.BillboardGui or visuals.BillboardGui.Parent == nil then
+        if visuals.BillboardGui then visuals.BillboardGui:Destroy() end
+        local billboardGui = Instance.new("BillboardGui")
+        billboardGui.AlwaysOnTop = true
+        billboardGui.Size = UDim2.new(10, 0, 1.5, 0)
+        billboardGui.StudsOffset = Vector3.new(0, 3, 0)
+        billboardGui.Adornee = head
+        
+        local infoLabel = Instance.new("TextLabel")
+        infoLabel.Name = "InfoLabel"
+        infoLabel.BackgroundTransparency = 1
+        infoLabel.Size = UDim2.new(1, 0, 1, 0)
+        infoLabel.Font = Enum.Font.SourceSansSemibold
+        infoLabel.TextSize = 18
+        infoLabel.TextColor3 = Color3.new(1, 1, 1) -- White text
+        infoLabel.TextStrokeTransparency = 0.5
+        infoLabel.Parent = billboardGui
+        
+        billboardGui.Parent = CoreGui
+        visuals.BillboardGui = billboardGui
+    end
+
+    -- Update the combined text every frame
+    local infoLabel = visuals.BillboardGui:FindFirstChild("InfoLabel")
+    if infoLabel then
+        local name = player.DisplayName
+        local distance = (localRootPart.Position - rootPart.Position).Magnitude
+        local health = humanoid.Health
+        local maxHealth = humanoid.MaxHealth
+        
+        infoLabel.Text = string.format("%s [%.0f studs] (%d/%d)", name, distance, health, maxHealth)
+    end
+end
+
+-- Main render loop
+local connection = RunService.RenderStepped:Connect(function()
+    if not espEnabled then return end
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= localPlayer then
+            pcall(createOrUpdateVisuals, player)
+        end
+    end
+end)
+
+Players.PlayerRemoving:Connect(cleanupVisuals)
+
+-- Function to completely stop the script and clean up
+getgenv().stopESP = function()
+    connection:Disconnect()
+    cleanupAllVisuals()
+    screenGui:Destroy()
+    getgenv().espIsRunning = false
+    print("ESP Script Terminated.")
+end
